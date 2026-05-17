@@ -388,6 +388,7 @@
     <div class="header">
       <div class="title" id="header-title">Shopping List</div>
       <div class="subtitle" id="subtitle">empty — add something</div>
+      <div id="sync-indicator" style="font-family:'DM Mono',monospace;font-size:10px;color:var(--brown-light);letter-spacing:0.08em;margin-top:4px;opacity:0;transition:opacity 0.3s;">✓ synced</div>
     </div>
 
     <div class="tabs">
@@ -463,19 +464,9 @@
   </div>
 
   <script>
-    const STORAGE_KEYS = {
-      shopping: 'daily-shop-v2',
-      todo: 'daily-todo-v1'
-    };
-
     const TITLES = {
       shopping: 'Shopping List',
       todo: 'To-Do'
-    };
-
-    const PLACEHOLDERS = {
-      shopping: 'What do you need?',
-      todo: 'What needs doing?'
     };
 
     let state = {
@@ -485,14 +476,73 @@
 
     let activeTab = 'shopping';
 
-    // ── Storage ─────────────────────────────────────────────
-    function load(tab) {
-      try { state[tab] = JSON.parse(localStorage.getItem(STORAGE_KEYS[tab])) || []; }
-      catch { state[tab] = []; }
+    // ── Cloud sync (GitHub Gist) ─────────────────────────────
+    const GIST_ID    = 'c0430f02f7eb058dc373bc5ffe16196a';
+    const GIST_TOKEN = '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';
+    const GIST_API   = 'https://api.github.com/gists/' + GIST_ID;
+    const CACHE_KEY  = 'gist-cache-v1';
+
+    let saveTimer = null;
+    let syncStatus = 'idle'; // idle | saving | error
+
+    function setSyncIndicator(status) {
+      syncStatus = status;
+      const el = document.getElementById('sync-indicator');
+      if (!el) return;
+      el.textContent = status === 'saving' ? '↑ saving…' : status === 'error' ? '⚠ offline' : '✓ synced';
+      el.style.opacity = status === 'idle' ? '0' : '1';
+      if (status === 'idle') return;
+      clearTimeout(el._hideTimer);
+      if (status !== 'saving') el._hideTimer = setTimeout(() => el.style.opacity = '0', 2000);
     }
 
-    function save(tab) {
-      localStorage.setItem(STORAGE_KEYS[tab], JSON.stringify(state[tab]));
+    async function loadFromCloud() {
+      // Try cloud first
+      try {
+        const r = await fetch(GIST_API, {
+          headers: { 'Authorization': 'token ' + GIST_TOKEN, 'Cache-Control': 'no-cache' }
+        });
+        if (!r.ok) throw new Error(r.status);
+        const data = await r.json();
+        const content = JSON.parse(data.files['data.json'].content);
+        state.shopping = content.shopping || [];
+        state.todo     = content.todo     || [];
+        localStorage.setItem(CACHE_KEY, JSON.stringify(state));
+        return true;
+      } catch {
+        // Fall back to local cache
+        try {
+          const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
+          if (cached) { state.shopping = cached.shopping || []; state.todo = cached.todo || []; }
+        } catch {}
+        setSyncIndicator('error');
+        return false;
+      }
+    }
+
+    async function saveToCloud() {
+      setSyncIndicator('saving');
+      const payload = { shopping: state.shopping, todo: state.todo };
+      localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+      try {
+        const r = await fetch(GIST_API, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': 'token ' + GIST_TOKEN,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ files: { 'data.json': { content: JSON.stringify(payload, null, 2) } } })
+        });
+        if (!r.ok) throw new Error(r.status);
+        setSyncIndicator('idle');
+      } catch {
+        setSyncIndicator('error');
+      }
+    }
+
+    function save() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(saveToCloud, 800);
     }
 
     // ── Tabs ─────────────────────────────────────────────────
@@ -525,25 +575,25 @@
       if (!text) return;
       state[tab].unshift({ id: Date.now(), text, done: false });
       input.value = '';
-      save(tab);
+      save();
       render(tab);
     }
 
     function toggle(tab, id) {
       state[tab] = state[tab].map(i => i.id === id ? { ...i, done: !i.done } : i);
-      save(tab);
+      save();
       render(tab);
     }
 
     function remove(tab, id) {
       state[tab] = state[tab].filter(i => i.id !== id);
-      save(tab);
+      save();
       render(tab);
     }
 
     function clearDone(tab) {
       state[tab] = state[tab].filter(i => !i.done);
-      save(tab);
+      save();
       render(tab);
     }
 
@@ -602,10 +652,7 @@
     }
 
     // ── Init ──────────────────────────────────────────────────
-    function init() {
-      load('shopping');
-      load('todo');
-
+    async function init() {
       // Wire up shopping
       document.getElementById('add-btn-shopping').addEventListener('click', () => add('shopping'));
       document.getElementById('input-shopping').addEventListener('keydown', e => {
@@ -617,6 +664,9 @@
       document.getElementById('input-todo').addEventListener('keydown', e => {
         if (e.key === 'Enter') add('todo');
       });
+
+      // Load from cloud (falls back to local cache if offline)
+      await loadFromCloud();
 
       render('shopping');
       render('todo');
