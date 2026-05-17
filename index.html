@@ -563,9 +563,20 @@
     // ── CRUD ─────────────────────────────────────────────────
     function add(tab) {
       const input = document.getElementById('input-' + tab);
-      const text = input.value.trim();
-      if (!text) return;
-      state[tab].unshift({ id: Date.now(), text, done: false });
+      const raw = input.value.trim();
+      if (!raw) return;
+
+      const texts = raw
+        .split(/[,\n;]+/)
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
+
+      if (texts.length === 0) return;
+
+      const now = Date.now();
+      const newItems = texts.map((text, i) => ({ id: now + i, text, done: false }));
+      state[tab] = [...newItems, ...state[tab]];
+
       input.value = '';
       save();
       render(tab);
