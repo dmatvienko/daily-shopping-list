@@ -495,13 +495,28 @@
     }
 
     async function loadFromCloud() {
-      // Try cloud first
       try {
         const r = await fetch(SYNC_URL, { cache: 'no-store' });
         if (!r.ok) throw new Error(r.status);
-        const content = await r.json();
-        state.shopping = content.shopping || [];
-        state.todo     = content.todo     || [];
+        const cloudData = await r.json();
+
+        const cloudHasItems = cloudData.shopping?.length > 0 || cloudData.todo?.length > 0;
+
+        if (!cloudHasItems) {
+          // Cloud is empty — check if we have unsaved local data to recover
+          try {
+            const cached = JSON.parse(localStorage.getItem(CACHE_KEY));
+            if (cached?.shopping?.length > 0 || cached?.todo?.length > 0) {
+              state.shopping = cached.shopping || [];
+              state.todo     = cached.todo     || [];
+              await saveToCloud(); // push local data up to cloud
+              return true;
+            }
+          } catch {}
+        }
+
+        state.shopping = cloudData.shopping || [];
+        state.todo     = cloudData.todo     || [];
         localStorage.setItem(CACHE_KEY, JSON.stringify(state));
         return true;
       } catch {
